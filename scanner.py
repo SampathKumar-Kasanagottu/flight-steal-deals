@@ -53,7 +53,19 @@ def bucket_for(days_ahead):
         return "7-13"
     if days_ahead <= 29:
         return "14-29"
-    return "30-60"
+    if days_ahead <= 59:
+        return "30-59"
+    return "60-92"
+
+
+def dates_for_run(config, run_hour):
+    """Rotating slice of the scan window: the full window is covered every
+    `slices` runs (12 => twice a day on hourly cron), keeping each run short."""
+    w = config.get("scan_window", {})
+    start = w.get("start_days_ahead", 2)
+    end = w.get("end_days_ahead", 92)
+    slices = max(1, w.get("slices", 12))
+    return [d for d in range(start, end + 1) if d % slices == run_hour % slices]
 
 
 def load_json(path, default):
@@ -118,7 +130,7 @@ def main():
         origin, dest = route["from"], route["to"]
         rkey = f"{origin}-{dest}"
         max_stops = route.get("max_stops", 1)
-        dates_ahead = config["scan_days_ahead"]
+        dates_ahead = dates_for_run(config, now.hour)
         if amadeus_this_run and am_cfg.get("priority_only") and not route.get("priority"):
             am_dates = []
         else:
@@ -221,7 +233,8 @@ def main():
             ) or "  (no fares returned — check logs)"
             tg_send(
                 f"✅ <b>No steal deals</b> — {stamp}\n"
-                f"Scanned {pairs_scanned} route-dates via {', '.join(sources)}.\n\n"
+                f"Scanned {pairs_scanned} route-dates via {', '.join(sources)} "
+                f"(rotating slice of next 90 days).\n\n"
                 f"\U0001f3dd️ Lakshadweep watch:\n{agx_block}\n\n"
                 f"Cheapest overall:\n{cheap_txt}"
             )

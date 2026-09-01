@@ -1,6 +1,6 @@
 {
   "timezone_note": "all times IST for display; scheduling handled by GitHub Actions cron (UTC)",
-  "scan_days_ahead": [2, 4, 7, 10, 14, 21, 28, 42],
+  "scan_window": { "start_days_ahead": 2, "end_days_ahead": 92, "slices": 12 },
   "deal": {
     "ratio_vs_median": 0.7,
     "min_samples_for_baseline": 25,

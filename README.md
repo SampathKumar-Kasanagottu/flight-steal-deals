@@ -55,7 +55,9 @@ $env:SCAN_LIMIT='10'; $env:DRY_RUN='1'; python scanner.py
 ## Tuning
 
 - Routes / stops / thresholds: `config.json` → `routes`
-- Scan dates: `scan_days_ahead` (days from today)
+- Scan window: `scan_window` — days 2–92 ahead, split into 12 rotating
+  hourly slices, so the full next-90-days window is covered every 12 h
+  (each departure date re-checked twice a day)
 - Ratio & baseline knobs: `deal` block
 - Skip night heartbeats: `heartbeat.quiet_hours_ist`, e.g. `[0,1,2,3,4,5,6]`
   (steal alerts always send)
