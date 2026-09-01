@@ -79,6 +79,25 @@ def fmt_inr(n):
     return f"₹{n:,}"
 
 
+def fmt_when(date_str):
+    """'2026-09-24' -> '24 - Sep - 2026 (WED)'."""
+    d = datetime.strptime(date_str, "%Y-%m-%d")
+    return f"{d.strftime('%d - %b - %Y')} ({d.strftime('%a').upper()})"
+
+
+def fare_meta(f):
+    """'🛫 6:25 AM · ✈ 4h 5m · layover 1h 20m' from whatever the source gave."""
+    parts = []
+    if f.dep_time:
+        parts.append(f"\U0001f6eb {f.dep_time}")
+    if f.duration:
+        parts.append(f"✈ {f.duration}")
+    if f.stops > 0:
+        parts.append(f"layover {f.layover}" if f.layover and f.layover != "—"
+                     else "layover incl. in total")
+    return " · ".join(parts)
+
+
 def tg_send(text):
     token = os.environ.get("TG_BOT_TOKEN")
     chat_ids = [c.strip() for c in os.environ.get("TG_CHAT_IDS", "").split(",") if c.strip()]
@@ -204,8 +223,12 @@ def main():
     for (rkey, date), f in sorted(all_best.items(), key=lambda kv: kv[1].price_inr):
         if "AGX" in rkey:
             stops_txt = "direct" if f.stops == 0 else f"{f.stops} stop"
-            agx_lines.append(
-                f"  {rkey} {date}: <b>{fmt_inr(f.price_inr)}</b> ({stops_txt}, {f.airline}, {f.source})")
+            meta = fare_meta(f)
+            detail = " · ".join(x for x in
+                                [f"<b>{fmt_inr(f.price_inr)}</b>", stops_txt,
+                                 f.airline.strip(), f.source] if x)
+            agx_lines.append(f"  {rkey} {fmt_when(date)}\n    {detail}"
+                             + (f"\n    {meta}" if meta else ""))
     agx_block = "\n".join(agx_lines[:4]) if agx_lines else "  no AGX fares returned this run"
 
     if deals:
@@ -218,10 +241,14 @@ def main():
             stops_txt = "direct" if f.stops == 0 else f"{f.stops} stop"
             tag = " \U0001f3dd️" if route.get("priority") else ""
             link = providers.google_flights_link(route["from"], route["to"], f.date)
+            meta = fare_meta(f)
+            detail = " · ".join(x for x in
+                                [f"<b>{fmt_inr(f.price_inr)}</b>", stops_txt,
+                                 f.airline.strip(), f"via {f.source}"] if x)
             lines.append(
-                f"{tag}<b>{f.route}</b> {f.date}\n"
-                f"  <b>{fmt_inr(f.price_inr)}</b> · {stops_txt} · {f.airline} · via {f.source}\n"
-                f"  {why} — <a href=\"{link}\">book</a>\n")
+                f"{tag}<b>{f.route}</b> {fmt_when(f.date)}\n  {detail}\n"
+                + (f"  {meta}\n" if meta else "")
+                + f"  {why} — <a href=\"{link}\">book</a>\n")
         tg_send("\n".join(lines))
     else:
         hb = config.get("heartbeat", {})
@@ -229,7 +256,8 @@ def main():
         if hb.get("enabled", True) and not quiet:
             cheapest = sorted(all_best.values(), key=lambda f: f.price_inr)[:3]
             cheap_txt = "\n".join(
-                f"  {f.route} {f.date}: {fmt_inr(f.price_inr)} ({f.source})" for f in cheapest
+                f"  {f.route} {fmt_when(f.date)}: {fmt_inr(f.price_inr)} ({f.source})"
+                for f in cheapest
             ) or "  (no fares returned — check logs)"
             tg_send(
                 f"✅ <b>No steal deals</b> — {stamp}\n"

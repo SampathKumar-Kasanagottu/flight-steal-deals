@@ -22,6 +22,19 @@ class Fare:
     airline: str
     source: str         # "google" | "amadeus" | "aviasales"
     google_price_level: str = ""  # "low"/"typical"/"high" (google only)
+    dep_time: str = ""  # "6:25 AM"
+    duration: str = ""  # total journey time, "4h 5m"
+    layover: str = ""   # "—" direct, "1h 20m" (amadeus), "" unknown
+
+
+def _short_dur(s):
+    return (str(s).replace(" hr ", "h ").replace(" hr", "h")
+            .replace(" min", "m").strip())
+
+
+def _hm(seconds):
+    h, m = int(seconds // 3600), int(seconds % 3600 // 60)
+    return f"{h}h {m}m" if h else f"{m}m"
 
 
 def _parse_price(text, usd_inr):
@@ -108,10 +121,14 @@ def fetch_google(origin, dest, date, max_stops, usd_inr):
             stops = 0
         if max_stops is not None and stops > max_stops:
             continue
+        dep_raw = str(getattr(f, "departure", ""))
         fares.append(Fare(
             route=f"{origin}-{dest}", date=date, price_inr=price, stops=stops,
             airline=str(getattr(f, "name", "?")), source="google",
             google_price_level=level,
+            dep_time=dep_raw.split(" on ")[0].strip(),
+            duration=_short_dur(getattr(f, "duration", "")),
+            layover="—" if stops == 0 else "",  # google only reports totals
         ))
     return fares
 
@@ -162,13 +179,25 @@ def fetch_amadeus(origin, dest, date, max_stops):
         for offer in r.json().get("data", []):
             try:
                 price = int(round(float(offer["price"]["grandTotal"])))
-                segs = offer["itineraries"][0]["segments"]
+                itin = offer["itineraries"][0]
+                segs = itin["segments"]
                 stops = len(segs) - 1
                 if max_stops is not None and stops > max_stops:
                     continue
+                from datetime import datetime as _dt
+                dep = _dt.fromisoformat(segs[0]["departure"]["at"])
+                gap = sum(
+                    (_dt.fromisoformat(b["departure"]["at"])
+                     - _dt.fromisoformat(a["arrival"]["at"])).total_seconds()
+                    for a, b in zip(segs, segs[1:]))
+                m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?", itin.get("duration", ""))
+                dur = _hm((int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60)) if m else ""
                 fares.append(Fare(
                     route=f"{origin}-{dest}", date=date, price_inr=price, stops=stops,
                     airline=segs[0].get("carrierCode", "?"), source="amadeus",
+                    dep_time=dep.strftime("%I:%M %p").lstrip("0"),
+                    duration=dur,
+                    layover="—" if stops == 0 else _hm(gap),
                 ))
             except (KeyError, IndexError, ValueError):
                 continue
@@ -202,10 +231,20 @@ def fetch_aviasales(origin, dest, date, max_stops):
             stops = int(d.get("transfers", 0))
             if max_stops is not None and stops > max_stops:
                 continue
+            dep_time = ""
+            try:
+                from datetime import datetime as _dt
+                dep_time = _dt.fromisoformat(d["departure_at"]).strftime("%I:%M %p").lstrip("0")
+            except (KeyError, ValueError):
+                pass
+            dur_min = int(d.get("duration", 0) or 0)
             fares.append(Fare(
                 route=f"{origin}-{dest}", date=date,
                 price_inr=int(round(float(d["price"]))), stops=stops,
                 airline=str(d.get("airline", "?")), source="aviasales",
+                dep_time=dep_time,
+                duration=_hm(dur_min * 60) if dur_min else "",
+                layover="—" if stops == 0 else "",
             ))
         return fares
     except Exception as e:
