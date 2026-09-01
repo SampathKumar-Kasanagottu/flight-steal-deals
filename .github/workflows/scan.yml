@@ -2,7 +2,9 @@ name: flight-deal-scan
 
 on:
   schedule:
-    - cron: "7 * * * *"   # hourly, offset from :00 to dodge GitHub cron congestion
+    # two chances per hour — GitHub silently skips cron ticks under load;
+    # the scanner itself dedupes heartbeats to one per hour
+    - cron: "7,37 * * * *"
   workflow_dispatch: {}
 
 permissions:

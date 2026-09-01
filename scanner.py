@@ -253,12 +253,15 @@ def main():
     else:
         hb = config.get("heartbeat", {})
         quiet = now.hour in hb.get("quiet_hours_ist", [])
-        if hb.get("enabled", True) and not quiet:
+        # runs fire up to twice an hour for cron resilience; one heartbeat/hour
+        recent_hb = time.time() - history.get("last_heartbeat_ts", 0) < 45 * 60
+        if hb.get("enabled", True) and not quiet and not recent_hb:
             cheapest = sorted(all_best.values(), key=lambda f: f.price_inr)[:3]
             cheap_txt = "\n".join(
                 f"  {f.route} {fmt_when(f.date)}: {fmt_inr(f.price_inr)} ({f.source})"
                 for f in cheapest
             ) or "  (no fares returned — check logs)"
+            history["last_heartbeat_ts"] = int(time.time())
             tg_send(
                 f"✅ <b>No steal deals</b> — {stamp}\n"
                 f"Scanned {pairs_scanned} route-dates via {', '.join(sources)} "
