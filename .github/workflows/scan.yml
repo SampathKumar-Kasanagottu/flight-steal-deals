@@ -17,7 +17,8 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # scan (~5 min) + the re-arm step's wait to the next hour boundary
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@v4
 
@@ -45,3 +46,19 @@ jobs:
           git diff --cached --quiet || git commit -m "chore: price history [skip ci]"
           git pull --rebase origin ${GITHUB_REF_NAME} || true
           git push || true
+
+      # GitHub's schedule: cron is unreliable on low-activity personal repos
+      # (it skipped every tick here). Each run waits for the next hour
+      # boundary and dispatches its successor, so the chain is self-sustaining
+      # entirely within GitHub Actions. Skipped when GH_PAT isn't set.
+      - name: Re-arm next hourly run
+        if: always()
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        timeout-minutes: 70
+        run: |
+          if [ -z "$GH_PAT" ]; then
+            echo "GH_PAT not set — skipping re-arm (relying on cron)"
+            exit 0
+          fi
+          python rearm.py
