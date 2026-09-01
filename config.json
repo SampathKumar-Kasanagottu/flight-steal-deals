@@ -17,10 +17,12 @@
     "priority_only": true,
     "max_dates": 6
   },
+  "origin_rank": { "HYD": 0, "BLR": 1, "VTZ": 1 },
   "routes": [
-    { "from": "COK", "to": "AGX", "priority": true,  "max_stops": 0, "steal_below_inr": 5500 },
     { "from": "HYD", "to": "AGX", "priority": true,  "max_stops": 1, "steal_below_inr": 8000 },
     { "from": "BLR", "to": "AGX", "priority": true,  "max_stops": 1, "steal_below_inr": 6800 },
+    { "from": "VTZ", "to": "AGX", "priority": true,  "max_stops": 1, "steal_below_inr": 9000 },
+    { "from": "COK", "to": "AGX", "priority": true,  "max_stops": 0, "steal_below_inr": 5500 },
     { "from": "AGX", "to": "COK", "priority": true,  "max_stops": 0, "steal_below_inr": 5500 },
     { "from": "HYD", "to": "BLR", "max_stops": 0, "steal_below_inr": 1800 },
     { "from": "HYD", "to": "DEL", "max_stops": 0, "steal_below_inr": 3200 },
@@ -28,7 +30,9 @@
     { "from": "HYD", "to": "MAA", "max_stops": 0, "steal_below_inr": 1900 },
     { "from": "HYD", "to": "GOX", "max_stops": 0, "steal_below_inr": 2300 },
     { "from": "HYD", "to": "CCU", "max_stops": 0, "steal_below_inr": 3000 },
+    { "from": "HYD", "to": "VTZ", "max_stops": 0, "steal_below_inr": 2200 },
     { "from": "BLR", "to": "DEL", "max_stops": 0, "steal_below_inr": 3500 },
-    { "from": "DEL", "to": "BOM", "max_stops": 0, "steal_below_inr": 2500 }
+    { "from": "VTZ", "to": "BLR", "max_stops": 0, "steal_below_inr": 2800 },
+    { "from": "VTZ", "to": "DEL", "max_stops": 0, "steal_below_inr": 4000 }
   ]
 }

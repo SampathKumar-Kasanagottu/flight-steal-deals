@@ -197,7 +197,10 @@ def main():
     agx_block = "\n".join(agx_lines[:4]) if agx_lines else "  no AGX fares returned this run"
 
     if deals:
-        deals.sort(key=lambda d: (not d[0].get("priority", False), d[1].price_inr))
+        origin_rank = config.get("origin_rank", {})
+        deals.sort(key=lambda d: (not d[0].get("priority", False),
+                                  origin_rank.get(d[0]["from"], 9),
+                                  d[1].price_inr))
         lines = [f"\U0001f525 <b>STEAL DEALS</b> — {stamp}\n"]
         for route, f, why in deals[:12]:
             stops_txt = "direct" if f.stops == 0 else f"{f.stops} stop"
