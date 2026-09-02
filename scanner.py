@@ -145,11 +145,27 @@ def main():
     deals = []
     google_levels = {}
 
+    # upcoming trip: scan its full date window on EVERY run, ahead of the
+    # regular basket, with priority sorting in alerts
+    trip = config.get("trip") or {}
+    trip_active = False
+    plan = []
+    if trip.get("routes"):
+        t_start = datetime.strptime(trip["start_date"], "%Y-%m-%d").date()
+        t_end = datetime.strptime(trip["end_date"], "%Y-%m-%d").date()
+        d0 = max(t_start, today + timedelta(days=1))
+        if d0 <= t_end:
+            trip_active = True
+            trip_das = list(range((d0 - today).days, (t_end - today).days + 1))
+            for r in trip["routes"]:
+                plan.append(({"priority": True, **r}, trip_das))
     for route in config["routes"]:
+        plan.append((route, dates_for_run(config, now.hour)))
+
+    for route, dates_ahead in plan:
         origin, dest = route["from"], route["to"]
         rkey = f"{origin}-{dest}"
         max_stops = route.get("max_stops", 1)
-        dates_ahead = dates_for_run(config, now.hour)
         if amadeus_this_run and am_cfg.get("priority_only") and not route.get("priority"):
             am_dates = []
         else:
@@ -231,6 +247,28 @@ def main():
                              + (f"\n    {meta}" if meta else ""))
     agx_block = "\n".join(agx_lines[:4]) if agx_lines else "  no AGX fares returned this run"
 
+    # trip watch: best fare per trip leg inside the trip window, every message
+    trip_block = ""
+    if trip_active:
+        trip_lines = []
+        for r in trip["routes"]:
+            rk = f"{r['from']}-{r['to']}"
+            cands = [f for (k, d), f in all_best.items()
+                     if k == rk and trip["start_date"] <= d <= trip["end_date"]]
+            if cands:
+                f = min(cands, key=lambda x: x.price_inr)
+                stops_txt = "direct" if f.stops == 0 else f"{f.stops} stop"
+                meta = fare_meta(f)
+                detail = " · ".join(x for x in
+                                    [f"<b>{fmt_inr(f.price_inr)}</b>", stops_txt,
+                                     f.airline.strip(), f.source] if x)
+                trip_lines.append(f"  {rk} {fmt_when(f.date)}\n    {detail}"
+                                  + (f"\n    {meta}" if meta else ""))
+            else:
+                trip_lines.append(f"  {rk}: no fares found yet")
+        trip_block = (f"\U0001f334 <b>Trip watch — {trip.get('name', '')}</b>\n"
+                      + "\n".join(trip_lines))
+
     if deals:
         origin_rank = config.get("origin_rank", {})
         deals.sort(key=lambda d: (not d[0].get("priority", False),
@@ -249,6 +287,8 @@ def main():
                 f"{tag}<b>{f.route}</b> {fmt_when(f.date)}\n  {detail}\n"
                 + (f"  {meta}\n" if meta else "")
                 + f"  {why} — <a href=\"{link}\">book</a>\n")
+        if trip_block:
+            lines.append(trip_block)
         tg_send("\n".join(lines))
     else:
         hb = config.get("heartbeat", {})
@@ -266,7 +306,8 @@ def main():
                 f"✅ <b>No steal deals</b> — {stamp}\n"
                 f"Scanned {pairs_scanned} route-dates via {', '.join(sources)} "
                 f"(rotating slice of next 90 days).\n\n"
-                f"\U0001f3dd️ Lakshadweep watch:\n{agx_block}\n\n"
+                + (f"{trip_block}\n\n" if trip_block else "")
+                + f"\U0001f3dd️ Lakshadweep watch:\n{agx_block}\n\n"
                 f"Cheapest overall:\n{cheap_txt}"
             )
 

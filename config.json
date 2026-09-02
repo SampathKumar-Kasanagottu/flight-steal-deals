@@ -13,9 +13,20 @@
     "quiet_hours_ist": []
   },
   "amadeus": {
-    "every_n_hours": 8,
+    "every_n_hours": 12,
     "priority_only": true,
-    "max_dates": 6
+    "max_dates": 4
+  },
+  "trip": {
+    "name": "Lakshadweep 12–20 Nov",
+    "start_date": "2026-11-12",
+    "end_date": "2026-11-20",
+    "routes": [
+      { "from": "HYD", "to": "GOX", "max_stops": 0, "steal_below_inr": 3500 },
+      { "from": "HYD", "to": "GOI", "max_stops": 0, "steal_below_inr": 3500 },
+      { "from": "GOX", "to": "AGX", "max_stops": 1, "steal_below_inr": 8500 },
+      { "from": "GOI", "to": "AGX", "max_stops": 1, "steal_below_inr": 8500 }
+    ]
   },
   "origin_rank": { "HYD": 0, "BLR": 1, "VTZ": 1 },
   "routes": [
