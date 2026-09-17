@@ -1,2 +1,6 @@
-fast-flights>=2.2,<3
+# Pinned exactly: primp 2.0.1 removed the "chrome_126" impersonate profile
+# fast-flights 2.2 requests, turning every Google query into a BuilderError
+# (0 fares priced for days). Bump only after testing the pair together.
+fast-flights==2.2
+primp==2.0.0
 requests>=2.31

@@ -269,6 +269,14 @@ def main():
         trip_block = (f"\U0001f334 <b>Trip watch — {trip.get('name', '')}</b>\n"
                       + "\n".join(trip_lines))
 
+    # self-diagnosis: a scan that prices nothing at all is a broken scanner,
+    # not an empty market — say so instead of a misleading "no fares found"
+    broken_banner = ""
+    if pairs_scanned >= 20 and not all_best:
+        broken_banner = ("⚠️ <b>Scanner problem</b>: 0 fares priced across "
+                         f"{pairs_scanned} route-dates — a fare source is likely "
+                         "broken. Check the Actions logs.\n\n")
+
     if deals:
         origin_rank = config.get("origin_rank", {})
         deals.sort(key=lambda d: (not d[0].get("priority", False),
@@ -303,7 +311,8 @@ def main():
             ) or "  (no fares returned — check logs)"
             history["last_heartbeat_ts"] = int(time.time())
             tg_send(
-                f"✅ <b>No steal deals</b> — {stamp}\n"
+                broken_banner
+                + f"✅ <b>No steal deals</b> — {stamp}\n"
                 f"Scanned {pairs_scanned} route-dates via {', '.join(sources)} "
                 f"(rotating slice of next 90 days).\n\n"
                 + (f"{trip_block}\n\n" if trip_block else "")
