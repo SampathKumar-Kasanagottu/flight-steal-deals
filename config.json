@@ -18,14 +18,17 @@
     "max_dates": 4
   },
   "trip": {
-    "name": "Lakshadweep 12–20 Nov",
+    "name": "Lakshadweep via Goa (GOX)",
     "start_date": "2026-11-12",
-    "end_date": "2026-11-20",
-    "routes": [
-      { "from": "HYD", "to": "GOX", "max_stops": 0, "steal_below_inr": 3500 },
-      { "from": "HYD", "to": "GOI", "max_stops": 0, "steal_below_inr": 3500 },
-      { "from": "GOX", "to": "AGX", "max_stops": 1, "steal_below_inr": 8500 },
-      { "from": "GOI", "to": "AGX", "max_stops": 1, "steal_below_inr": 8500 }
+    "end_date": "2026-11-30",
+    "stay_days": [3, 4, 5],
+    "fly91_est_inr": 5500,
+    "steal_total_inr": 17500,
+    "legs": [
+      { "key": "out_home",    "from": "HYD", "to": "GOX", "max_stops": 1, "steal_below_inr": 2800 },
+      { "key": "out_island",  "from": "GOX", "to": "AGX", "max_stops": 0, "steal_below_inr": 4800 },
+      { "key": "back_island", "from": "AGX", "to": "GOX", "max_stops": 0, "steal_below_inr": 4800 },
+      { "key": "back_home",   "from": "GOX", "to": "HYD", "max_stops": 1, "steal_below_inr": 2800 }
     ]
   },
   "origin_rank": { "HYD": 0, "BLR": 1, "VTZ": 1 },

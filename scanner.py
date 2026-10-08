@@ -145,20 +145,32 @@ def main():
     deals = []
     google_levels = {}
 
-    # upcoming trip: scan its full date window on EVERY run, ahead of the
-    # regular basket, with priority sorting in alerts
+    # upcoming trip: four-leg round-trip planner (HYD->GOX evening before,
+    # FLY91 GOX->AGX next morning, back after stay_days nights). Each leg's
+    # full date window is scanned on EVERY run, ahead of the regular basket.
     trip = config.get("trip") or {}
     trip_active = False
+    trip_fares = {}  # (leg_key, iso_date) -> [Fare, ...]
     plan = []
-    if trip.get("routes"):
+    if trip.get("legs"):
         t_start = datetime.strptime(trip["start_date"], "%Y-%m-%d").date()
         t_end = datetime.strptime(trip["end_date"], "%Y-%m-%d").date()
-        d0 = max(t_start, today + timedelta(days=1))
-        if d0 <= t_end:
+        stays = trip.get("stay_days", [3, 4])
+        if today + timedelta(days=2) <= t_end:
             trip_active = True
-            trip_das = list(range((d0 - today).days, (t_end - today).days + 1))
-            for r in trip["routes"]:
-                plan.append(({"priority": True, **r}, trip_das))
+            windows = {
+                "out_home":    (t_start - timedelta(days=1), t_end - timedelta(days=1)),
+                "out_island":  (t_start, t_end),
+                "back_island": (t_start + timedelta(days=min(stays)),
+                                t_end + timedelta(days=max(stays))),
+                "back_home":   (t_start + timedelta(days=min(stays)),
+                                t_end + timedelta(days=max(stays) + 1)),
+            }
+            for leg in trip["legs"]:
+                w0, w1 = windows[leg["key"]]
+                das = [d for d in range((w0 - today).days, (w1 - today).days + 1)
+                       if d >= 1]
+                plan.append(({"priority": True, "trip_leg": leg["key"], **leg}, das))
     for route in config["routes"]:
         plan.append((route, dates_for_run(config, now.hour)))
 
@@ -184,6 +196,8 @@ def main():
                 fares += providers.fetch_aviasales(origin, dest, date, max_stops)
             time.sleep(1.0 + random.random())
 
+            if route.get("trip_leg") and fares:
+                trip_fares[(route["trip_leg"], date)] = fares
             if not fares:
                 continue
             best = min(fares, key=lambda f: f.price_inr)
@@ -247,27 +261,98 @@ def main():
                              + (f"\n    {meta}" if meta else ""))
     agx_block = "\n".join(agx_lines[:4]) if agx_lines else "  no AGX fares returned this run"
 
-    # trip watch: best fare per trip leg inside the trip window, every message
+    # trip plan: cheapest full round-trip packages (every message).
+    # FLY91 GOX<->AGX legs fall back to a labeled estimate when no source
+    # prices them; times come from FLY91's published schedule (eff. 10 Sep 26):
+    # IC 5102 GOX->AGX daily 07:30->09:30; IC 5101 AGX->GOX 15:45->18:00
+    # (Mon/Thu/Fri/Sat/Sun) or 13:45->15:45 (Tue/Wed).
     trip_block = ""
+    trip_steals = []
     if trip_active:
-        trip_lines = []
-        for r in trip["routes"]:
-            rk = f"{r['from']}-{r['to']}"
-            cands = [f for (k, d), f in all_best.items()
-                     if k == rk and trip["start_date"] <= d <= trip["end_date"]]
-            if cands:
-                f = min(cands, key=lambda x: x.price_inr)
-                stops_txt = "direct" if f.stops == 0 else f"{f.stops} stop"
-                meta = fare_meta(f)
-                detail = " · ".join(x for x in
-                                    [f"<b>{fmt_inr(f.price_inr)}</b>", stops_txt,
-                                     f.airline.strip(), f.source] if x)
-                trip_lines.append(f"  {rk} {fmt_when(f.date)}\n    {detail}"
-                                  + (f"\n    {meta}" if meta else ""))
+        est = trip.get("fly91_est_inr", 5500)
+
+        def fly91_est(leg_key, d):
+            if leg_key == "out_island":
+                dep, route = "7:30 AM", "GOX-AGX"
+                flight = "FLY91 IC 5102"
             else:
-                trip_lines.append(f"  {rk}: no fares found yet")
-        trip_block = (f"\U0001f334 <b>Trip watch — {trip.get('name', '')}</b>\n"
-                      + "\n".join(trip_lines))
+                dep = "1:45 PM" if d.weekday() in (1, 2) else "3:45 PM"
+                route, flight = "AGX-GOX", "FLY91 IC 5101"
+            return Fare(route=route, date=d.isoformat(), price_inr=est, stops=0,
+                        airline=flight, source="est", dep_time=dep,
+                        duration="2h 0m", layover="—")
+
+        def leg_best(key, d):
+            fares = trip_fares.get((key, d.isoformat()))
+            return min(fares, key=lambda f: f.price_inr) if fares else None
+
+        def dep_after(f, hh, mm):
+            try:
+                t = datetime.strptime(f.dep_time.strip(), "%I:%M %p").time()
+                return (t.hour, t.minute) >= (hh, mm)
+            except ValueError:
+                return False
+
+        packages = []
+        g = max(t_start, today + timedelta(days=2))
+        while g <= t_end:
+            fa = leg_best("out_home", g - timedelta(days=1))
+            if fa:
+                fb = leg_best("out_island", g) or fly91_est("out_island", g)
+                for stay in stays:
+                    r = g + timedelta(days=stay)
+                    fc = leg_best("back_island", r) or fly91_est("back_island", r)
+                    # same-evening HYD flight must leave after FLY91 lands
+                    hh, mm = (17, 15) if r.weekday() in (1, 2) else (19, 30)
+                    cands = [f for f in trip_fares.get(("back_home", r.isoformat()), [])
+                             if dep_after(f, hh, mm)]
+                    cands += trip_fares.get(("back_home",
+                                             (r + timedelta(days=1)).isoformat()), [])
+                    if not cands:
+                        continue
+                    fd = min(cands, key=lambda f: f.price_inr)
+                    total = sum(x.price_inr for x in (fa, fb, fc, fd))
+                    packages.append((total, stay, g, (fa, fb, fc, fd)))
+            g += timedelta(days=1)
+        packages.sort(key=lambda p: p[0])
+
+        def leg_line(f):
+            parts = [f"  {f.route.replace('-', '→')} {fmt_when(f.date)}",
+                     f"<b>{fmt_inr(f.price_inr)}</b>" + (" est" if f.source == "est" else "")]
+            if f.dep_time:
+                parts.append(f"\U0001f6eb {f.dep_time}")
+            if f.airline.strip():
+                parts.append(f.airline.strip())
+            if f.stops:
+                parts.append(f"{f.stops} stop")
+            return " · ".join(parts)
+
+        plan_lines = []
+        for i, (total, stay, g, legs) in enumerate(packages[:3], 1):
+            plan_lines.append(
+                f"<b>{i}) {fmt_inr(total)}</b> · {stay} nights on Agatti "
+                f"({g.strftime('%d %b')} → {(g + timedelta(days=stay)).strftime('%d %b')})\n"
+                + "\n".join(leg_line(f) for f in legs))
+        if plan_lines:
+            trip_block = (f"\U0001f334 <b>Trip plan — {trip.get('name', '')}</b>\n\n"
+                          + "\n\n".join(plan_lines)
+                          + "\n<i>est = FLY91 fare estimate (no live source yet) — "
+                            "verify at fly91.in</i>")
+        else:
+            trip_block = (f"\U0001f334 <b>Trip plan — {trip.get('name', '')}</b>\n"
+                          "  no complete packages priced yet")
+
+        # package-level steal alert with per-package cooldown
+        steal_total = trip.get("steal_total_inr")
+        for total, stay, g, legs in packages[:5]:
+            if not steal_total or total > steal_total:
+                continue
+            akey = f"TRIP|{g.isoformat()}|{stay}"
+            prev = history["alerts"].get(akey)
+            if (not prev or time.time() - prev["ts"] > deal_cfg["realert_hours"] * 3600
+                    or total <= prev["price"] * (1 - deal_cfg["realert_drop_pct"] / 100)):
+                trip_steals.append((total, stay, g, legs))
+                history["alerts"][akey] = {"price": total, "ts": int(time.time())}
 
     # self-diagnosis: a scan that prices nothing at all is a broken scanner,
     # not an empty market — say so instead of a misleading "no fares found"
@@ -276,6 +361,15 @@ def main():
         broken_banner = ("⚠️ <b>Scanner problem</b>: 0 fares priced across "
                          f"{pairs_scanned} route-dates — a fare source is likely "
                          "broken. Check the Actions logs.\n\n")
+
+    if trip_steals:
+        total, stay, g, legs = trip_steals[0]
+        tg_send(
+            f"\U0001f525 <b>TRIP STEAL</b> — {stamp}\n"
+            f"<b>{fmt_inr(total)} round trip</b> · {stay} nights on Agatti "
+            f"({g.strftime('%d %b')} → {(g + timedelta(days=stay)).strftime('%d %b')})\n"
+            + "\n".join(leg_line(f) for f in legs)
+            + "\n<i>est = FLY91 estimate — verify at fly91.in</i>")
 
     if deals:
         origin_rank = config.get("origin_rank", {})
@@ -303,7 +397,7 @@ def main():
         quiet = now.hour in hb.get("quiet_hours_ist", [])
         # runs fire up to twice an hour for cron resilience; one heartbeat/hour
         recent_hb = time.time() - history.get("last_heartbeat_ts", 0) < 45 * 60
-        if hb.get("enabled", True) and not quiet and not recent_hb:
+        if hb.get("enabled", True) and not quiet and not recent_hb and not trip_steals:
             cheapest = sorted(all_best.values(), key=lambda f: f.price_inr)[:3]
             cheap_txt = "\n".join(
                 f"  {f.route} {fmt_when(f.date)}: {fmt_inr(f.price_inr)} ({f.source})"
