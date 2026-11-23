@@ -31,6 +31,25 @@
       { "key": "back_home",   "from": "GOX", "to": "HYD", "max_stops": 1, "steal_below_inr": 2800 }
     ]
   },
+  "watches": [
+    {
+      "id": "hyd-goa-jan-2027",
+      "name": "Hyderabad ⇄ Goa · January 2027",
+      "short_name": "Goa in January",
+      "window_label": "January 2027",
+      "start_date": "2027-01-01",
+      "end_date": "2027-01-31",
+      "max_stops": 0,
+      "refresh_slices": 2,
+      "top_n": 5,
+      "summary_levels": 3,
+      "calendar_hours_ist": [8, 20],
+      "directions": [
+        { "label": "HYD → Goa", "pairs": [["HYD", "GOI"], ["HYD", "GOX"]], "steal_below_inr": 3000 },
+        { "label": "Goa → HYD", "pairs": [["GOI", "HYD"], ["GOX", "HYD"]], "steal_below_inr": 3600 }
+      ]
+    }
+  ],
   "origin_rank": { "HYD": 0, "BLR": 1, "VTZ": 1 },
   "routes": [
     { "from": "HYD", "to": "AGX", "priority": true,  "max_stops": 1, "steal_below_inr": 8000 },

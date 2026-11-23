@@ -25,6 +25,7 @@ from pathlib import Path
 import requests
 
 import providers
+import watch
 from providers import Fare  # noqa: F401
 
 ROOT = Path(__file__).parent
@@ -239,6 +240,21 @@ def main():
                     deals.append((route, best, why))
                     history["alerts"][akey] = {"price": best.price_inr, "ts": int(time.time())}
 
+    # date-window watches: every day of a fixed window, both directions
+    # (e.g. HYD <-> Goa for all of January) — see watch.py
+    watch_blocks, watch_calendars, watch_queries = [], [], 0
+    for w in config.get("watches", []):
+        if not watch.active(w, today):
+            continue
+        n, steals = watch.scan(w, history, now, usd_inr, deal_cfg)
+        watch_queries += n
+        deals.extend(steals)
+        summary = watch.block(w, history, now)
+        if summary:
+            watch_blocks.append(summary)
+        watch_calendars += watch.calendars(w, history, now)
+    watch_block = "\n\n".join(watch_blocks)
+
     # prune stale alert-dedupe entries
     history["alerts"] = {k: v for k, v in history["alerts"].items()
                          if time.time() - v["ts"] < 7 * 86400}
@@ -391,6 +407,8 @@ def main():
                 + f"  {why} — <a href=\"{link}\">book</a>\n")
         if trip_block:
             lines.append(trip_block)
+        if watch_block:
+            lines.append(("\n" if trip_block else "") + watch_block)
         tg_send("\n".join(lines))
     else:
         hb = config.get("heartbeat", {})
@@ -407,16 +425,23 @@ def main():
             tg_send(
                 broken_banner
                 + f"✅ <b>No steal deals</b> — {stamp}\n"
-                f"Scanned {pairs_scanned} route-dates via {', '.join(sources)} "
-                f"(rotating slice of next 90 days).\n\n"
+                f"Scanned {pairs_scanned + watch_queries} route-dates via "
+                f"{', '.join(sources)} (rotating slice of next 90 days).\n\n"
                 + (f"{trip_block}\n\n" if trip_block else "")
+                + (f"{watch_block}\n\n" if watch_block else "")
                 + f"\U0001f3dd️ Lakshadweep watch:\n{agx_block}\n\n"
                 f"Cheapest overall:\n{cheap_txt}"
             )
 
+    # full day-by-day watch lists go out as their own messages, on their own
+    # schedule (calendar_hours_ist), whatever the hourly message did
+    for msg in watch_calendars:
+        tg_send(msg)
+
     (ROOT / "price_history.json").write_text(
         json.dumps(history, separators=(",", ":")), encoding="utf-8")
-    print(f"done: {pairs_scanned} pairs, {len(all_best)} priced, {len(deals)} deals")
+    print(f"done: {pairs_scanned} pairs, {len(all_best)} priced, {len(deals)} deals, "
+          f"{watch_queries} watch queries, {len(watch_calendars)} calendars sent")
 
 
 if __name__ == "__main__":

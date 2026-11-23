@@ -52,6 +52,25 @@ pip install -r requirements.txt
 $env:SCAN_LIMIT='10'; $env:DRY_RUN='1'; python scanner.py
 ```
 
+## Date-window watches (every day of a month, both ways)
+
+`config.json` → `watches` tracks the **lowest fare for every single day** of a
+fixed window, in each direction — currently Hyderabad ⇄ Goa for all of
+January 2027 (Goa = GOI Dabolim + GOX Mopa, cheaper airport wins per day).
+
+- **Every hourly message** gets a short block: the three lowest price levels
+  per direction and the days that have them (`summary_levels`).
+- **Twice a day** (`calendar_hours_ist`, default 08:00 and 20:00 IST) the full
+  day-by-day list goes out, one message per direction: price, airport and the
+  flights at that price; tap a day to open it in Google Flights. 🟢 marks the
+  `top_n` cheapest days.
+- A fare at or below a direction's `steal_below_inr` joins the 🔥 steal alert.
+- Each run re-checks half the window (`refresh_slices: 2` → every day
+  refreshed every 2 h) plus any day it has no fare for; the latest fare per
+  day is kept in `price_history.json` → `watch`. Code: `watch.py`.
+- The watch switches itself off after `end_date`. To watch another month or
+  city pair, add another entry to `watches` with its own `id`.
+
 ## Tuning
 
 - Routes / stops / thresholds: `config.json` → `routes`
@@ -69,5 +88,6 @@ $env:SCAN_LIMIT='10'; $env:DRY_RUN='1'; python scanner.py
 
 - GitHub cron is best-effort; runs can drift 5–30 min. `[skip ci]` history
   commits also keep the repo "active" so GitHub never auto-disables the schedule.
-- Prices scraped from a US runner may come back in USD; they're converted to
-  INR with a live rate (open.er-api.com) before comparison.
+- Google is queried as desktop Chrome with `curr=INR`, so fares are exact
+  rupee prices and always carry departure time + airline. If a page still
+  comes back in USD it is converted with a live rate (open.er-api.com).

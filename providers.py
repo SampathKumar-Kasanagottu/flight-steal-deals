@@ -72,48 +72,118 @@ def get_usd_inr(cache):
 
 
 # ---------------------------------------------------------------- google
-def fetch_google(origin, dest, date, max_stops, usd_inr):
+_GOOGLE_URL = "https://www.google.com/travel/flights"
+_desktop_fetch = {"ok": True, "logged": False, "wins": 0, "fails": 0}
+
+
+def _google_query(origin, dest, date, max_stops):
+    """One Google Flights search -> fast-flights Result.
+
+    fast-flights' stock fetch asks primp for a browser profile it no longer
+    has, so primp picks a random one: mobile profiles get a page without
+    departure time / airline, and with no currency set Google prices by the
+    caller's IP (GitHub runners get whole-dollar USD). So fetch the same URL
+    here as desktop Chrome with INR asked for, and let fast-flights parse it.
+    If that client can't be built, use the stock path for the rest of the run.
+    """
+    from fast_flights import FlightData, Passengers, get_flights
+    kwargs = dict(
+        flight_data=[FlightData(date=date, from_airport=origin, to_airport=dest)],
+        trip="one-way",
+        seat="economy",
+        passengers=Passengers(adults=1, children=0, infants_in_seat=0, infants_on_lap=0),
+    )
+    if max_stops is not None:
+        kwargs["max_stops"] = max_stops
+    # "fallback" retries via a hosted service that now 401s; stick to
+    # direct fetch and treat a no-results page as an empty answer.
+    mode = os.environ.get("FF_FETCH_MODE", "common")
+
+    if _desktop_fetch["ok"] and mode == "common":
+        try:
+            import primp
+            from fast_flights.core import parse_response
+            from fast_flights.filter import TFSData
+            client = primp.Client(impersonate="chrome_146", impersonate_os="windows",
+                                  verify=False)
+            tfs = TFSData.from_interface(**kwargs).as_b64().decode("utf-8")
+        except Exception as e:
+            _desktop_fetch["ok"] = False
+            print(f"  google: desktop fetch unavailable ({type(e).__name__}: "
+                  f"{str(e)[:100]}) — using fast-flights' own fetch")
+        else:
+            try:
+                res = client.get(_GOOGLE_URL, params={
+                    "tfs": tfs, "hl": "en", "tfu": "EgQIABABIgA", "curr": "INR"})
+                if res.status_code != 200:
+                    raise ConnectionError(f"HTTP {res.status_code}")
+                result = parse_response(res)
+            except Exception as e:
+                # a real results page with no flights is an answer; anything
+                # else (block page, HTTP error) counts against this fetch. If
+                # it never works at all, hand the run back to the stock fetch.
+                empty_page = (isinstance(e, RuntimeError)
+                              and "No flights found" in str(e)
+                              and "Verifying your request" not in str(e))
+                if not empty_page:
+                    _desktop_fetch["fails"] += 1
+                    if not _desktop_fetch["wins"] and _desktop_fetch["fails"] >= 5:
+                        _desktop_fetch["ok"] = False
+                        print("  google: desktop fetch failed 5 times without one "
+                              "success — using fast-flights' own fetch")
+                raise
+            _desktop_fetch["wins"] += 1
+            return result
+    return get_flights(fetch_mode=mode, **kwargs)
+
+
+def fetch_google(origin, dest, date, max_stops, usd_inr, limit=10):
     """Google Flights via fast-flights (no API key). Google already
-    aggregates airline sites + most OTAs, so this is the widest net."""
+    aggregates airline sites + most OTAs, so this is the widest net.
+    `limit` caps the fares returned (None = every flight on the page)."""
     try:
-        from fast_flights import FlightData, Passengers, get_flights
+        import fast_flights  # noqa: F401
     except ImportError:
         return []
-    try:
-        kwargs = dict(
-            flight_data=[FlightData(date=date, from_airport=origin, to_airport=dest)],
-            trip="one-way",
-            seat="economy",
-            passengers=Passengers(adults=1, children=0, infants_in_seat=0, infants_on_lap=0),
-            # "fallback" retries via a hosted service that now 401s; stick to
-            # direct fetch and treat a no-results page as an empty answer.
-            fetch_mode=os.environ.get("FF_FETCH_MODE", "common"),
-        )
-        if max_stops is not None:
-            kwargs["max_stops"] = max_stops
+    result = None
+    for attempt in (1, 2):
         try:
-            result = get_flights(**kwargs)
-        except RuntimeError:
-            raise
-        except Exception:
-            time.sleep(3)  # one retry for transient network errors
-            result = get_flights(**kwargs)
-    except RuntimeError as e:
-        if "No flights found" in str(e):
-            print(f"  google {origin}-{dest} {date}: no itineraries")
-        else:
-            print(f"  google {origin}-{dest} {date}: RuntimeError: {str(e)[:120]}")
-        return []
-    except Exception as e:
-        print(f"  google {origin}-{dest} {date}: {type(e).__name__}: {str(e)[:120]}")
-        return []
+            result = _google_query(origin, dest, date, max_stops)
+            break
+        except RuntimeError as e:
+            msg = str(e)
+            # Google's "Verifying your request..." interstitial is not an
+            # empty answer — it usually clears on a second try
+            if "Verifying your request" in msg and attempt == 1:
+                time.sleep(4)
+                continue
+            if "Verifying your request" in msg:
+                print(f"  google {origin}-{dest} {date}: blocked by verification page")
+            elif "No flights found" in msg:
+                print(f"  google {origin}-{dest} {date}: no itineraries")
+            else:
+                print(f"  google {origin}-{dest} {date}: RuntimeError: {msg[:120]}")
+            return []
+        except Exception as e:
+            if attempt == 1:
+                time.sleep(3)  # one retry for transient network errors
+                continue
+            print(f"  google {origin}-{dest} {date}: {type(e).__name__}: {str(e)[:120]}")
+            return []
 
     level = getattr(result, "current_price", "") or ""
-    fares = []
-    for f in getattr(result, "flights", [])[:10]:
-        price = _parse_price(getattr(f, "price", ""), usd_inr)
+    fares, seen = [], set()
+    for f in getattr(result, "flights", []):
+        raw_price = getattr(f, "price", "")
+        price = _parse_price(raw_price, usd_inr)
         if not price:
             continue
+        if not _desktop_fetch["logged"]:
+            # one sample per run so the Actions log shows the currency in use
+            _desktop_fetch["logged"] = True
+            # (ascii(): the rupee sign prints as ₹, safe on any console)
+            print(f"  google sample {origin}-{dest} {date}: price text "
+                  f"{ascii(raw_price)}, departure {str(getattr(f, 'departure', ''))!r}")
         stops = getattr(f, "stops", 0)
         try:
             stops = int(stops)
@@ -122,15 +192,21 @@ def fetch_google(origin, dest, date, max_stops, usd_inr):
         if max_stops is not None and stops > max_stops:
             continue
         dep_raw = str(getattr(f, "departure", ""))
-        fares.append(Fare(
+        fare = Fare(
             route=f"{origin}-{dest}", date=date, price_inr=price, stops=stops,
             airline=str(getattr(f, "name", "?")), source="google",
             google_price_level=level,
             dep_time=dep_raw.split(" on ")[0].strip(),
             duration=_short_dur(getattr(f, "duration", "")),
             layover="—" if stops == 0 else "",  # google only reports totals
-        ))
-    return fares
+        )
+        # the page lists its "best" flights a second time among the rest
+        ident = (fare.price_inr, fare.dep_time, fare.airline, fare.stops)
+        if fare.dep_time and ident in seen:
+            continue
+        seen.add(ident)
+        fares.append(fare)
+    return fares if limit is None else fares[:limit]
 
 
 # --------------------------------------------------------------- amadeus
