@@ -442,6 +442,7 @@ def main():
         json.dumps(history, separators=(",", ":")), encoding="utf-8")
     print(f"done: {pairs_scanned} pairs, {len(all_best)} priced, {len(deals)} deals, "
           f"{watch_queries} watch queries, {len(watch_calendars)} calendars sent")
+    print(providers.google_stats())
 
 
 if __name__ == "__main__":

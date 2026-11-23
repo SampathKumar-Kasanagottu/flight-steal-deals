@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+import types
 import urllib.parse
 from dataclasses import dataclass
 
@@ -73,18 +74,94 @@ def get_usd_inr(cache):
 
 # ---------------------------------------------------------------- google
 _GOOGLE_URL = "https://www.google.com/travel/flights"
-_desktop_fetch = {"ok": True, "logged": False, "wins": 0, "fails": 0}
+# per-run counters, printed in the Actions log by google_stats()
+_gstats = {"html": 0, "data": 0, "empty": 0, "errors": 0, "retried": 0,
+           "failed": 0, "stock": 0, "logged": False, "client_ok": True}
+_DS1 = re.compile(r"AF_initDataCallback\(\{key: 'ds:1', hash: '\d+', "
+                  r"data:(.*?), sideChannel: \{\}\}\);</script>", re.S)
+# Google's backend failing one request: the same page, but the flight data
+# block is a travel.frontend.flights.ErrorResponse (status 13 = internal).
+# From GitHub's runners 1 request in 4-8 gets this; the next one usually works.
+_DS1_ERROR = re.compile(r"AF_initDataCallback\(\{key: 'ds:1',[^<]*?errorHasStatus: true")
+
+
+# browsers to present as, in order, until a page carries the flights (the
+# error pages above come per request, so each retry has its own odds)
+_PROFILES = [("chrome_146", "windows"), ("chrome_146", "android"),
+             ("chrome_146", "linux")]
+
+
+class _NoResults(Exception):
+    """No attempt returned flight data: Google error pages every time, or a
+    page this code can't read."""
+
+
+def _clock_txt(hm):
+    """[15] / [7, 5] / [None, 30] -> '3:00 PM' / '7:05 AM' / '12:30 AM'."""
+    h = (hm[0] if hm else 0) or 0
+    m = (hm[1] if hm and len(hm) > 1 else 0) or 0
+    return f"{(h % 12) or 12}:{m:02d} {'AM' if h < 12 else 'PM'}"
+
+
+def _js_flights(page, origin, dest):
+    """Flights from the page's embedded data block (ds:1).
+
+    Returns a fast-flights-like Result, an empty Result when Google answered
+    "no flights", or None when the block is missing or doesn't look like
+    this search (Google changed the layout) — so a misread can never become
+    a wrong price."""
+    m = _DS1.search(page)
+    if not m:
+        return None
+    try:
+        d = json.loads(m.group(1))
+    except ValueError:
+        return None
+    try:
+        flights, other_route = [], 0
+        for block in (d[2], d[3]):  # "best" flights, then all other flights
+            for item in ((block or [None])[0] or []):
+                info, price_box = item[0], item[1]
+                price = (price_box[0][1] if price_box and price_box[0]
+                         and len(price_box[0]) > 1 else None)
+                if not isinstance(price, int) or price <= 0:
+                    continue  # "price unavailable"
+                if info[3] != origin or info[6] != dest:
+                    other_route += 1  # e.g. a nearby airport
+                    continue
+                legs = info[2] or []
+                mins = info[9] if isinstance(info[9], int) else 0
+                flights.append(types.SimpleNamespace(
+                    is_best=block is d[2],
+                    name=", ".join(info[1] or []) or str(info[0] or "?"),
+                    departure=_clock_txt(info[5]),
+                    duration=f"{mins // 60} hr {mins % 60} min" if mins else "",
+                    stops=max(0, len(legs) - 1),
+                    price=f"₹{price}",
+                ))
+        if other_route and not flights:
+            return None  # nothing matches this search: the layout has moved
+        level = ""
+        ins = d[5] if len(d) > 5 and isinstance(d[5], list) else None
+        if flights and ins and len(ins) > 5:
+            lo = ins[4][1] if ins[4] and len(ins[4]) > 1 else None
+            hi = ins[5][1] if ins[5] and len(ins[5]) > 1 else None
+            cheapest = min(int(f.price[1:]) for f in flights)
+            if isinstance(lo, int) and isinstance(hi, int):
+                level = "low" if cheapest < lo else "high" if cheapest > hi else "typical"
+    except (IndexError, TypeError, KeyError, ValueError):
+        return None
+    return types.SimpleNamespace(current_price=level, flights=flights)
 
 
 def _google_query(origin, dest, date, max_stops):
-    """One Google Flights search -> fast-flights Result.
+    """One Google Flights search -> fast-flights-like Result.
 
-    fast-flights' stock fetch asks primp for a browser profile it no longer
-    has, so primp picks a random one: mobile profiles get a page without
-    departure time / airline, and with no currency set Google prices by the
-    caller's IP (GitHub runners get whole-dollar USD). So fetch the same URL
-    here as desktop Chrome with INR asked for, and let fast-flights parse it.
-    If that client can't be built, use the stock path for the rest of the run.
+    Fetched as desktop Chrome with INR asked for (fast-flights' own fetch
+    asks primp for a profile it no longer has, gets a random one, and from
+    GitHub's US runners Google then prices in whole dollars). Flights are
+    read from the data block embedded in the page, else from the HTML list.
+    A Google error page is retried as the next browser in _PROFILES.
     """
     from fast_flights import FlightData, Passengers, get_flights
     kwargs = dict(
@@ -99,42 +176,64 @@ def _google_query(origin, dest, date, max_stops):
     # direct fetch and treat a no-results page as an empty answer.
     mode = os.environ.get("FF_FETCH_MODE", "common")
 
-    if _desktop_fetch["ok"] and mode == "common":
+    if _gstats["client_ok"] and mode == "common":
         try:
             import primp
             from fast_flights.core import parse_response
             from fast_flights.filter import TFSData
-            client = primp.Client(impersonate="chrome_146", impersonate_os="windows",
-                                  verify=False)
             tfs = TFSData.from_interface(**kwargs).as_b64().decode("utf-8")
+            client = primp.Client(impersonate=_PROFILES[0][0],
+                                  impersonate_os=_PROFILES[0][1], verify=False)
         except Exception as e:
-            _desktop_fetch["ok"] = False
-            print(f"  google: desktop fetch unavailable ({type(e).__name__}: "
-                  f"{str(e)[:100]}) — using fast-flights' own fetch")
+            _gstats["client_ok"] = False
+            print(f"  google: own fetch unavailable ({type(e).__name__}: "
+                  f"{str(e)[:100]}) — using fast-flights' fetch")
         else:
-            try:
+            for n, (browser, os_) in enumerate(_PROFILES):
+                if n:
+                    _gstats["retried"] += 1
+                    time.sleep(1.5)
+                    # a fresh client per attempt: which page Google serves
+                    # varies per request, so a retry has its own odds
+                    client = primp.Client(impersonate=browser, impersonate_os=os_,
+                                          verify=False)
                 res = client.get(_GOOGLE_URL, params={
                     "tfs": tfs, "hl": "en", "tfu": "EgQIABABIgA", "curr": "INR"})
                 if res.status_code != 200:
                     raise ConnectionError(f"HTTP {res.status_code}")
-                result = parse_response(res)
-            except Exception as e:
-                # a real results page with no flights is an answer; anything
-                # else (block page, HTTP error) counts against this fetch. If
-                # it never works at all, hand the run back to the stock fetch.
-                empty_page = (isinstance(e, RuntimeError)
-                              and "No flights found" in str(e)
-                              and "Verifying your request" not in str(e))
-                if not empty_page:
-                    _desktop_fetch["fails"] += 1
-                    if not _desktop_fetch["wins"] and _desktop_fetch["fails"] >= 5:
-                        _desktop_fetch["ok"] = False
-                        print("  google: desktop fetch failed 5 times without one "
-                              "success — using fast-flights' own fetch")
-                raise
-            _desktop_fetch["wins"] += 1
-            return result
+                page = res.text
+                if "Verifying your request" in page[:20000]:
+                    raise RuntimeError("No flights found: Verifying your request")
+                if _DS1_ERROR.search(page):
+                    _gstats["errors"] += 1
+                    continue  # Google's side failed this request: ask again
+                # the data block first: it carries times + airline on every
+                # page type, and matched the HTML list exactly where both exist
+                result = _js_flights(page, origin, dest)
+                if result is not None:
+                    _gstats["data" if result.flights else "empty"] += 1
+                    if not result.flights:
+                        raise RuntimeError("No flights found")
+                    return result
+                try:
+                    result = parse_response(res)
+                    _gstats["html"] += 1
+                    return result
+                except RuntimeError:
+                    pass
+                # neither data nor list: ask again, as the next browser
+            _gstats["failed"] += 1
+            raise _NoResults(f"no flight data after {len(_PROFILES)} tries")
+    _gstats["stock"] += 1
     return get_flights(fetch_mode=mode, **kwargs)
+
+
+def google_stats():
+    s = _gstats
+    return (f"google: {s['data']} searches read from page data, {s['html']} from "
+            f"the HTML list, {s['empty']} with no flights, {s['failed']} unanswered "
+            f"after {len(_PROFILES)} tries | {s['errors']} Google error pages, "
+            f"{s['retried']} retries, {s['stock']} via fast-flights' fetch")
 
 
 def fetch_google(origin, dest, date, max_stops, usd_inr, limit=10):
@@ -164,6 +263,9 @@ def fetch_google(origin, dest, date, max_stops, usd_inr, limit=10):
             else:
                 print(f"  google {origin}-{dest} {date}: RuntimeError: {msg[:120]}")
             return []
+        except _NoResults as e:
+            print(f"  google {origin}-{dest} {date}: {e}")
+            return []
         except Exception as e:
             if attempt == 1:
                 time.sleep(3)  # one retry for transient network errors
@@ -178,9 +280,9 @@ def fetch_google(origin, dest, date, max_stops, usd_inr, limit=10):
         price = _parse_price(raw_price, usd_inr)
         if not price:
             continue
-        if not _desktop_fetch["logged"]:
+        if not _gstats["logged"]:
             # one sample per run so the Actions log shows the currency in use
-            _desktop_fetch["logged"] = True
+            _gstats["logged"] = True
             # (ascii(): the rupee sign prints as ₹, safe on any console)
             print(f"  google sample {origin}-{dest} {date}: price text "
                   f"{ascii(raw_price)}, departure {str(getattr(f, 'departure', ''))!r}")

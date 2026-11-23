@@ -89,5 +89,15 @@ January 2027 (Goa = GOI Dabolim + GOX Mopa, cheaper airport wins per day).
 - GitHub cron is best-effort; runs can drift 5–30 min. `[skip ci]` history
   commits also keep the repo "active" so GitHub never auto-disables the schedule.
 - Google is queried as desktop Chrome with `curr=INR`, so fares are exact
-  rupee prices and always carry departure time + airline. If a page still
-  comes back in USD it is converted with a live rate (open.er-api.com).
+  rupee prices with departure time + airline. Flights are read from the data
+  block embedded in the page (`ds:1`), with the HTML list as backup; each
+  flight must match the searched route, so a Google layout change can't
+  produce wrong prices. If a page still comes back in USD it is converted
+  with a live rate (open.er-api.com).
+- From GitHub's runners Google answers roughly 1 request in 4–8 with an
+  internal-error page (`ErrorResponse` in place of the flight data). Each
+  search is retried up to 3 times (desktop, phone, Linux Chrome), so almost
+  every search still gets an answer. The Actions log ends with a
+  `google: ...` line counting error pages, retries and unanswered searches.
+- A ⚠️ "Scanner problem" banner means a whole scan priced nothing: check
+  that `google:` line in the run's log first.
