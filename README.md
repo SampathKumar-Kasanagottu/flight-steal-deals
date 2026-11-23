@@ -99,5 +99,8 @@ January 2027 (Goa = GOI Dabolim + GOX Mopa, cheaper airport wins per day).
   search is retried up to 3 times (desktop, phone, Linux Chrome), so almost
   every search still gets an answer. The Actions log ends with a
   `google: ...` line counting error pages, retries and unanswered searches.
-- A ⚠️ "Scanner problem" banner means a whole scan priced nothing: check
-  that `google:` line in the run's log first.
+- A run that prices nothing at all gets an ℹ️ "Google didn't answer this
+  hour's searches" line: some hours Google turns away every request from that
+  runner (a few times a week); it passes by itself. Only **two runs in a
+  row** that price nothing raise the ⚠️ "Scanner problem" banner — then check
+  the `google:` line at the end of the run's log.

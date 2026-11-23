@@ -370,13 +370,23 @@ def main():
                 trip_steals.append((total, stay, g, legs))
                 history["alerts"][akey] = {"price": total, "ts": int(time.time())}
 
-    # self-diagnosis: a scan that prices nothing at all is a broken scanner,
-    # not an empty market — say so instead of a misleading "no fares found"
+    # self-diagnosis: a scan that prices nothing at all is not an empty
+    # market. One such run is Google turning GitHub's servers away for that
+    # hour (a few times a week; it passes by itself), so just say so. Two in
+    # a row is an outage worth a look (e.g. Sep 2026: days of 0-fare scans).
+    nothing_priced = pairs_scanned >= 20 and not all_best
+    streak = history.get("nothing_priced_runs", 0) + 1 if nothing_priced else 0
+    history["nothing_priced_runs"] = streak
     broken_banner = ""
-    if pairs_scanned >= 20 and not all_best:
-        broken_banner = ("⚠️ <b>Scanner problem</b>: 0 fares priced across "
-                         f"{pairs_scanned} route-dates — a fare source is likely "
-                         "broken. Check the Actions logs.\n\n")
+    if streak >= 2:
+        broken_banner = ("⚠️ <b>Scanner problem</b>: nothing priced in "
+                         f"{streak} runs in a row ({pairs_scanned} route-dates this "
+                         "run). Check the <code>google:</code> line at the end of "
+                         "the Actions log.\n\n")
+    elif streak == 1:
+        broken_banner = ("ℹ️ Google didn't answer this hour's searches (it turns "
+                         "GitHub's servers away now and then). Next scan in an "
+                         "hour.\n\n")
 
     if trip_steals:
         total, stay, g, legs = trip_steals[0]
@@ -420,7 +430,7 @@ def main():
             cheap_txt = "\n".join(
                 f"  {f.route} {fmt_when(f.date)}: {fmt_inr(f.price_inr)} ({f.source})"
                 for f in cheapest
-            ) or "  (no fares returned — check logs)"
+            ) or "  (none priced this run)"
             history["last_heartbeat_ts"] = int(time.time())
             tg_send(
                 broken_banner
